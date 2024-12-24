@@ -6,3 +6,12 @@ gitetsu-PowerSystemTweak/
 obj/
 
 
+bin/Release/XGamingRuntime.dll
+bin/Release/PowerSystemTweak.pdb
+bin/Release/MonoMod.Utils.xml
+bin/Release/MonoMod.Utils.dll
+bin/Release/Mono.Cecil.dll
+bin/Release/BepInEx.xml
+bin/Release/BepInEx.dll
+bin/Release/0Harmony.xml
+bin/Release/0Harmony.dll
