@@ -1,0 +1,8 @@
+.vs
+bin/Debug/
+bin/Release/UnityEngine*
+bin/Release/Assembly-CSharp.dll
+gitetsu-PowerSystemTweak/
+obj/
+
+
