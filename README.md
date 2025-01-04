@@ -23,7 +23,7 @@
     - 2： 低于燃料发电机 Priority lower than fuel generator
 
 ## 注意事项 Note
-- 该Mod会完全替换电力系统处理函数(PowerSystem.GameTick)，可能会与其他mod产生冲突 This mod replaces the power system main processing function (PowerSystem.GameTick), which may conflict with other mods
+- 该Mod会完全替换电力系统处理PowerSystem.GameTick，如果发现有其他MOD也对这个函数加了Patch，本MOD将自动放弃patch并失效。 Please note that this mod will completely replace the power system processing function PowerSystem.GameTick, and if other mods also patch this function, this feature will automatically give up to patch the method and become invalid.
 
 ## 版本 Changelog
 ### 1.0.2
