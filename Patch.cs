@@ -30,17 +30,22 @@ namespace PowerSystemTweek
                 StopWatchList.Add(new HighStopwatch());
             }
         }
+
+        public static void SetExchangerDischargePriority(EExchangerDischargeStrategy strategy)
+        {
+            ExchangerDischargeStrategy = strategy;
+        }
         //[HarmonyPrefix, HarmonyPatch(typeof(PowerGeneratorComponent), nameof(PowerGeneratorComponent.EnergyCap_Gamma_Req))]
         //static bool EnergyCap_Gamma_Req_Prefix(PowerGeneratorComponent __instance, float sx, float sy, float sz, float increase, float eta, ref long __result)
         //{
         //    if (GameMain.gameTick % 60 == __instance.id)
         //    {
-        //        float num1 = (float)(((double)sx * (double)__instance.x + (double)sy * (double)__instance.y + (double)sz * (double)__instance.z + (double)increase * 0.800000011920929 + (__instance.catalystPoint > 0 ? (double)__instance.ionEnhance : 0.0)) * 6.0 + 0.5);
-        //        float num2 = (double)num1 > 1.0 ? 1f : ((double)num1 < 0.0 ? 0.0f : num1);
-        //        __instance.currentStrength = num2;
-        //        float num3 = (float)Cargo.accTableMilli[__instance.catalystIncLevel];
-        //        __instance.capacityCurrentTick = (long)((double)__instance.currentStrength * (1.0 + (double)__instance.warmup * 1.5) * (__instance.catalystPoint > 0 ? 2.0 * (1.0 + (double)num3) : 1.0) * (__instance.productId > 0 ? 8.0 : 1.0) * (double)__instance.genEnergyPerTick);
-        //        __instance.warmupSpeed = (float)(((double)num2 - 0.75) * 4.0 * 1.38888890433009E-05);                
+        //        float num_power_gen_cap = (float)(((double)sx * (double)__instance.x + (double)sy * (double)__instance.y + (double)sz * (double)__instance.z + (double)increase * 0.800000011920929 + (__instance.catalystPoint > 0 ? (double)__instance.ionEnhance : 0.0)) * 6.0 + 0.5);
+        //        float num_cons_req = (double)num_power_gen_cap > 1.0 ? 1f : ((double)num_power_gen_cap < 0.0 ? 0.0f : num_power_gen_cap);
+        //        __instance.currentStrength = num_cons_req;
+        //        float num_power_discharge = (float)Cargo.accTableMilli[__instance.catalystIncLevel];
+        //        __instance.capacityCurrentTick = (long)((double)__instance.currentStrength * (1.0 + (double)__instance.warmup * 1.5) * (__instance.catalystPoint > 0 ? 2.0 * (1.0 + (double)num_power_discharge) : 1.0) * (__instance.productId > 0 ? 8.0 : 1.0) * (double)__instance.genEnergyPerTick);
+        //        __instance.warmupSpeed = (float)(((double)num_cons_req - 0.75) * 4.0 * 1.38888890433009E-05);                
         //    }
 
         //    eta = (float)(1.0 - (1.0 - (double)eta) * (1.0 - (double)__instance.warmup * (double)__instance.warmup * 0.400000005960464));
@@ -75,12 +80,12 @@ namespace PowerSystemTweek
             FactoryProductionStat factoryProductionStat = GameMain.statistics.production.factoryStatPool[powerSystem.factory.index];
             int[] productRegister = factoryProductionStat.productRegister;
             int[] consumeRegister = factoryProductionStat.consumeRegister;
-            long num1 = 0;
-            long num2 = 0;
-            long num3 = 0;
-            long num4 = 0;
-            long num5 = 0;
-            float _dt = 0.01666667f;
+            long num_power_gen_cap = 0;
+            long num_cons_req = 0;
+            long num_power_discharge = 0;
+            long num_power_charge = 0;
+            long num_energy_cons_stat = 0;
+            float _dt = 0.0166666675f;
             PlanetData planet = powerSystem.factory.planet;
             float windStrength = planet.windStrength;
             float luminosity = planet.luminosity;
@@ -95,13 +100,18 @@ namespace PowerSystemTweek
             bool useCata = time % 10L == 0L;
             Array.Clear((Array)powerSystem.currentGeneratorCapacities, 0, powerSystem.currentGeneratorCapacities.Length);
             Player mainPlayer = GameMain.mainPlayer;
-            Vector3 vector3 = Vector3.zero;
+            Vector3 zero = Vector3.zero;
+            Vector3 vector3_1 = Vector3.zero;
             float num6 = 0.0f;
             bool flag1;
             if (mainPlayer.mecha.coreEnergyCap - mainPlayer.mecha.coreEnergy > 0.0 && mainPlayer.isAlive && mainPlayer.planetId == planet.id)
             {
-                vector3 = isMultithreadMode ? powerSystem.multithreadPlayerPos : mainPlayer.position;
-                flag1 = true;
+                float num7 = powerSystem.factory.planet.realRadius + 0.2f;
+                Vector3 vector3_2 = isMultithreadMode ? powerSystem.multithreadPlayerPos : mainPlayer.position;
+                float magnitude = vector3_2.magnitude;
+                if ((double)magnitude > 0.0)
+                    vector3_1 = vector3_2 * (num7 / magnitude);
+                flag1 = (double)magnitude > (double)num7 - 30.0 && (double)magnitude < (double)num7 + 50.0;
             }
             else
                 flag1 = false;
@@ -109,32 +119,29 @@ namespace PowerSystemTweek
                 num6 = Mathf.Pow(Mathf.Clamp01((float)(1.0 - mainPlayer.mecha.coreEnergy / mainPlayer.mecha.coreEnergyCap) * 10f), 0.75f);
             /** Patch note, replace private field dysonSphere with traversed local variable **/
             float response = dysonSphere != null ? dysonSphere.energyRespCoef : 0.0f;
-            int num7 = (int)(Math.Min(Math.Abs(powerSystem.factory.planet.rotationPeriod), Math.Abs(powerSystem.factory.planet.orbitalPeriod)) * 60.0 / 2160.0);
-            if (num7 < 1)
-                num7 = 1;
-            else if (num7 > 60)
-                num7 = 60;
+            int solar_decimation = (int)(Math.Min(Math.Abs(powerSystem.factory.planet.rotationPeriod), Math.Abs(powerSystem.factory.planet.orbitalPeriod)) * 60.0 / 2160.0);
+            if (solar_decimation < 1)
+                solar_decimation = 1;
+            else if (solar_decimation > 60)
+                solar_decimation = 60;
             if (powerSystem.factory.planet.singularity == EPlanetSingularity.TidalLocked)
-                num7 = 60;
-            bool flag2 = time % (long)num7 == 0L || GameMain.onceGameTick <= 2L;
-            int num8 = (int)(time % 90L);
+                solar_decimation = 60;
+            bool flag2 = time % (long)solar_decimation == 0L || GameMain.onceGameTick <= 2L;
+            int num9 = (int)(time % 90L);
             EntityData[] entityPool = powerSystem.factory.entityPool;
             for (int index1 = 1; index1 < powerSystem.netCursor; ++index1)
             {
                 PowerNetwork powerNetwork = powerSystem.netPool[index1];
                 if (powerNetwork != null && powerNetwork.id == index1)
                 {
-                    /* Patch note: calculate clean energy capacity */
-                    long cleanEnergyGeneratorCap = 0;
-
                     List<int> consumers = powerNetwork.consumers;
                     int count1 = consumers.Count;
-                    long num9 = 0;
+                    long num_energy_req = 0;
                     for (int index2 = 0; index2 < count1; ++index2)
                     {
                         long requiredEnergy = powerSystem.consumerPool[consumers[index2]].requiredEnergy;
-                        num9 += requiredEnergy;
-                        num2 += requiredEnergy;
+                        num_energy_req += requiredEnergy;
+                        num_cons_req += requiredEnergy;
                     }
                     foreach (PowerNetworkStructures.Node node in powerNetwork.nodes)
                     {
@@ -143,450 +150,431 @@ namespace PowerSystemTweek
                         {
                             if ((double)powerSystem.nodePool[id].coverRadius <= 20.0)
                             {
-                                double num10 = 0.0;
+                                double num11 = 0.0;
                                 if (flag1)
                                 {
-                                    double num11 = (double)powerSystem.nodePool[id].powerPoint.x * 0.987999975681305 - (double)vector3.x;
-                                    float num12 = powerSystem.nodePool[id].powerPoint.y * 0.988f - vector3.y;
-                                    float num13 = powerSystem.nodePool[id].powerPoint.z * 0.988f - vector3.z;
+                                    double num12 = (double)powerSystem.nodePool[id].powerPoint.x * 0.98799997568130493 - (double)vector3_1.x;
+                                    float num13 = powerSystem.nodePool[id].powerPoint.y * 0.988f - vector3_1.y;
+                                    float num14 = powerSystem.nodePool[id].powerPoint.z * 0.988f - vector3_1.z;
                                     float coverRadius = powerSystem.nodePool[id].coverRadius;
                                     if ((double)coverRadius < 9.0)
                                         coverRadius += 2.01f;
                                     else if ((double)coverRadius > 20.0)
                                         coverRadius += 0.5f;
-                                    float num14 = (float)(num11 * num11 + (double)num12 * (double)num12 + (double)num13 * (double)num13);
-                                    float num15 = coverRadius * coverRadius;
-                                    if ((double)num14 <= (double)num15)
+                                    float num15 = (float)(num12 * num12 + (double)num13 * (double)num13 + (double)num14 * (double)num14);
+                                    float num16 = coverRadius * coverRadius;
+                                    if ((double)num15 <= (double)num16)
                                     {
                                         double consumerRatio = powerNetwork.consumerRatio;
-                                        float num16 = (float)(((double)num15 - (double)num14) / (3.0 * (double)coverRadius));
-                                        if ((double)num16 > 1.0)
-                                            num16 = 1f;
-                                        num10 = (double)num6 * consumerRatio * consumerRatio * (double)num16;
+                                        float num17 = (float)(((double)num16 - (double)num15) / (3.0 * (double)coverRadius));
+                                        if ((double)num17 > 1.0)
+                                            num17 = 1f;
+                                        num11 = (double)num6 * consumerRatio * consumerRatio * (double)num17;
                                     }
                                 }
-                                double num17 = (double)powerSystem.nodePool[id].idleEnergyPerTick * (1.0 - num10) + (double)powerSystem.nodePool[id].workEnergyPerTick * num10;
+                                double num18 = (double)powerSystem.nodePool[id].idleEnergyPerTick * (1.0 - num11) + (double)powerSystem.nodePool[id].workEnergyPerTick * num11;
                                 if (powerSystem.nodePool[id].requiredEnergy < powerSystem.nodePool[id].idleEnergyPerTick)
                                     powerSystem.nodePool[id].requiredEnergy = powerSystem.nodePool[id].idleEnergyPerTick;
-                                if ((double)powerSystem.nodePool[id].requiredEnergy < num17 - 0.01)
+                                if ((double)powerSystem.nodePool[id].requiredEnergy < num18 - 0.01)
                                 {
-                                    double num11 = num17 * 0.02 + (double)powerSystem.nodePool[id].requiredEnergy * 0.98;
-                                    powerSystem.nodePool[id].requiredEnergy = (int)(num11 + 0.9999);
+                                    double num19 = num18 * 0.02 + (double)powerSystem.nodePool[id].requiredEnergy * 0.98;
+                                    powerSystem.nodePool[id].requiredEnergy = (int)(num19 + 0.9999);
                                 }
-                                else if ((double)powerSystem.nodePool[id].requiredEnergy > num17 + 0.01)
+                                else if ((double)powerSystem.nodePool[id].requiredEnergy > num18 + 0.01)
                                 {
-                                    double num11 = num17 * 0.2 + (double)powerSystem.nodePool[id].requiredEnergy * 0.8;
-                                    powerSystem.nodePool[id].requiredEnergy = (int)num11;
+                                    double num20 = num18 * 0.2 + (double)powerSystem.nodePool[id].requiredEnergy * 0.8;
+                                    powerSystem.nodePool[id].requiredEnergy = (int)num20;
                                 }
                             }
                             else
                                 powerSystem.nodePool[id].requiredEnergy = powerSystem.nodePool[id].idleEnergyPerTick;
                             long requiredEnergy = (long)powerSystem.nodePool[id].requiredEnergy;
-                            num9 += requiredEnergy;
-                            num2 += requiredEnergy;
+                            num_energy_req += requiredEnergy;
+                            num_cons_req += requiredEnergy;
                         }
                     }
-                    long num18 = 0;
+                    long num_gen_exc_output_cap = 0;
                     List<int> exchangers = powerNetwork.exchangers;
                     int count2 = exchangers.Count;
-                    long num19 = 0;
-                    long num20 = 0;
-                    long num21 = 0;
-                    long num22 = 0;
-                    for (int index2 = 0; index2 < count2; ++index2)
+                    long num_exc_charged_total = 0;
+                    long num_exc_discharged_total = 0;
+                    long num_exc_output_cap = 0;
+                    long num_exc_input_cap = 0;
+                    for (int index3 = 0; index3 < count2; ++index3)
                     {
-                        int index3 = exchangers[index2];
-                        powerSystem.excPool[index3].StateUpdate();
-                        powerSystem.excPool[index3].BeltUpdate(powerSystem.factory);
-                        bool flag3 = (double)powerSystem.excPool[index3].state >= 1.0;
-                        bool flag4 = (double)powerSystem.excPool[index3].state <= -1.0;
+                        int index4 = exchangers[index3];
+                        powerSystem.excPool[index4].StateUpdate();
+                        powerSystem.excPool[index4].BeltUpdate(powerSystem.factory);
+                        bool flag3 = (double)powerSystem.excPool[index4].state >= 1.0;
+                        bool flag4 = (double)powerSystem.excPool[index4].state <= -1.0;
                         if (!flag3 && !flag4)
                         {
-                            powerSystem.excPool[index3].capsCurrentTick = 0L;
-                            powerSystem.excPool[index3].currEnergyPerTick = 0L;
+                            powerSystem.excPool[index4].capsCurrentTick = 0L;
+                            powerSystem.excPool[index4].currEnergyPerTick = 0L;
                         }
-                        int entityId = powerSystem.excPool[index3].entityId;
-                        float num10 = (float)(((double)powerSystem.excPool[index3].state + 1.0) * (double)entityAnimPool[entityId].working_length * 0.5);
-                        if ((double)num10 >= 3.99000000953674)
-                            num10 = 3.99f;
-                        entityAnimPool[entityId].time = num10;
+                        int entityId = powerSystem.excPool[index4].entityId;
+                        float num26 = (float)(((double)powerSystem.excPool[index4].state + 1.0) * (double)entityAnimPool[entityId].working_length * 0.5);
+                        if ((double)num26 >= 3.9900000095367432)
+                            num26 = 3.99f;
+                        entityAnimPool[entityId].time = num26;
                         entityAnimPool[entityId].state = 0U;
-                        entityAnimPool[entityId].power = (float)powerSystem.excPool[index3].currPoolEnergy / (float)powerSystem.excPool[index3].maxPoolEnergy;
+                        entityAnimPool[entityId].power = (float)powerSystem.excPool[index4].currPoolEnergy / (float)powerSystem.excPool[index4].maxPoolEnergy;
                         if (flag4)
                         {
-                            long num11 = powerSystem.excPool[index3].OutputCaps();
-                            num21 += num11;
-                            num18 = num21;
-                            powerSystem.currentGeneratorCapacities[powerSystem.excPool[index3].subId] += num11;
+                            long num27 = powerSystem.excPool[index4].OutputCaps();
+                            num_exc_output_cap += num27;
+                            num_gen_exc_output_cap = num_exc_output_cap;
+                            powerSystem.currentGeneratorCapacities[powerSystem.excPool[index4].subId] += num27;
                         }
                         else if (flag3)
-                            num22 += powerSystem.excPool[index3].InputCaps();
+                            num_exc_input_cap += powerSystem.excPool[index4].InputCaps();
                     }
                     /* Code Analysis Note: until this line
-                     * num18 = num21 = ExcOutCap
-                     * num9 = num2 = ConsReq
-                     * num22 = ExcInpCap
+                     * capGenAndExc = capExcDischarge = ExcOutCap
+                     * num_energy_req = num_cons_req = ConsReq
+                     * num_exc_input_cap = ExcInpCap
                      */
+                    /* Patch note: calculate clean energy capacity */
+                    long cleanEnergyGeneratorCap = 0;
+
                     List<int> generators = powerNetwork.generators;
                     int count3 = generators.Count;
-                    for (int index2 = 0; index2 < count3; ++index2)
+                    for (int index5 = 0; index5 < count3; ++index5)
                     {
-                        int index3 = generators[index2];
-                        long num10;
-                        if (powerSystem.genPool[index3].wind)
+                        int index6 = generators[index5];
+                        long num28;
+                        if (powerSystem.genPool[index6].wind)
                         {
-                            num10 = powerSystem.genPool[index3].EnergyCap_Wind(windStrength);
-                            num18 += num10;
-                            cleanEnergyGeneratorCap += num10;
+                            num28 = powerSystem.genPool[index6].EnergyCap_Wind(windStrength);
+                            num_gen_exc_output_cap += num28;
+                            cleanEnergyGeneratorCap += num28;   //Line Patch
                         }
-                        else if (powerSystem.genPool[index3].photovoltaic)
+                        else if (powerSystem.genPool[index6].photovoltaic)
                         {
                             if (flag2)
                             {
-                                num10 = powerSystem.genPool[index3].EnergyCap_PV(normalized.x, normalized.y, normalized.z, luminosity);
-                                num18 += num10;
+                                num28 = powerSystem.genPool[index6].EnergyCap_PV(normalized.x, normalized.y, normalized.z, luminosity);
+                                num_gen_exc_output_cap += num28;
                             }
                             else
                             {
-                                num10 = powerSystem.genPool[index3].capacityCurrentTick;
-                                num18 += num10;
+                                num28 = powerSystem.genPool[index6].capacityCurrentTick;
+                                num_gen_exc_output_cap += num28;
                             }
-                            cleanEnergyGeneratorCap += num10;
+                            cleanEnergyGeneratorCap += num28;  // Line Patch
                         }
-                        else if (powerSystem.genPool[index3].gamma)
+                        else if (powerSystem.genPool[index6].gamma)
                         {
-                            num10 = powerSystem.genPool[index3].EnergyCap_Gamma(response);
-                            num18 += num10;
-                            cleanEnergyGeneratorCap += num10;
+                            num28 = powerSystem.genPool[index6].EnergyCap_Gamma(response);
+                            num_gen_exc_output_cap += num28;
+                            cleanEnergyGeneratorCap += num28;  // Line Patch
                         }
-                        else if (powerSystem.genPool[index3].geothermal)
+                        else if (powerSystem.genPool[index6].geothermal)
                         {
-                            num10 = powerSystem.genPool[index3].EnergyCap_GTH();
-                            num18 += num10;
-                            cleanEnergyGeneratorCap += num10;
+                            num28 = powerSystem.genPool[index6].EnergyCap_GTH();
+                            num_gen_exc_output_cap += num28;
+                            cleanEnergyGeneratorCap += num28;  // Line Patch
                         }
                         else
                         {
-                            num10 = powerSystem.genPool[index3].EnergyCap_Fuel();
-                            num18 += num10;
-                            entitySignPool[powerSystem.genPool[index3].entityId].signType = num10 > 30L ? 0U : 8U;
+                            num28 = powerSystem.genPool[index6].EnergyCap_Fuel();
+                            num_gen_exc_output_cap += num28;
+                            entitySignPool[powerSystem.genPool[index6].entityId].signType = num28 > 30L ? 0U : 8U;
                         }
-                        powerSystem.currentGeneratorCapacities[powerSystem.genPool[index3].subId] += num10;
+                        powerSystem.currentGeneratorCapacities[powerSystem.genPool[index6].subId] += num28;
                     }
-                    num1 += num18 - num21;
-                    long num23 = num18 - num9;
-
+                    num_power_gen_cap += num_gen_exc_output_cap - num_exc_output_cap;
+                    long num_energy_margin = num_gen_exc_output_cap - num_energy_req;
+                    long num_energy_at_field_charge = 0;
                     /* Code Analysis Note: until this line
-                     * num21 = ExcOutCap
-                     * num18 = ExcOutCap + GenCap
-                     * num1 = GenCap
-                     * num9 = num2 = ConsReq
-                     * num22 = ExcInpCap
-                     * num23 = ExcOutCap + GenCap - ConsReq
+                     * capExcDischarge = ExcOutCap
+                     * capGenAndExc = ExcOutCap + GenCap
+                     * num_power_gen_cap = GenCap
+                     * num_energy_req = num_cons_req = ConsReq
+                     * num_exc_input_cap = ExcInpCap
+                     * num_energy_margin = ExcOutCap + GenCap - ConsReq
                      */
-                    long num24 = 0;
-                    if (num23 > 0L && powerNetwork.exportDemandRatio > 0.0)
+
+                    if (num_energy_margin > 0L && powerNetwork.exportDemandRatio > 0.0)
                     {
                         if (powerNetwork.exportDemandRatio > 1.0)
                             powerNetwork.exportDemandRatio = 1.0;
-                        num24 = (long)((double)num23 * powerNetwork.exportDemandRatio + 0.5);
-                        num23 -= num24;
-                        num9 += num24;
+                        num_energy_at_field_charge = (long)((double)num_energy_margin * powerNetwork.exportDemandRatio + 0.5);
+                        num_energy_margin -= num_energy_at_field_charge;
+                        num_energy_req += num_energy_at_field_charge;
                     }
 
                     /* Code Analysis Note: until this line
                      * NOTE: powerNetwork.exportDemandRatio = 1.0 - (1.0 - powerNetwork.exportDemandRatio) * (1.0 - planetAtField.fillDemandRatio); regarding ATFields
                      * 
-                     * num21 = ExcOutCap
-                     * num18 = ExcOutCap + GenCap
-                     * num1 = GenCap
-                     * num2 = ConsReq
-                     * num22 = ExcInpCap
-                     * num24 = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
-                     * num23 = ExcOutCap + GenCap - ConsReq - EnergyExport => this value determine Accs should charge
-                     * num9 = ConsReq + EnergyExport
+                     * capExcDischarge = ExcOutCap
+                     * capGenAndExc = ExcOutCap + GenCap
+                     * num_power_gen_cap = GenCap
+                     * num_cons_req = ConsReq
+                     * num_exc_input_cap = ExcInpCap
+                     * num_energy_at_field_charge = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
+                     * num_energy_margin = ExcOutCap + GenCap - ConsReq - EnergyExport => this value determine Accs should charge
+                     * num_energy_req = ConsReq + EnergyExport
                      */
 
                     powerNetwork.exportDemandRatio = 0.0;
                     powerNetwork.energyStored = 0L;
                     List<int> accumulators = powerNetwork.accumulators;
                     int count4 = accumulators.Count;
-                    long num25 = 0;
-                    long num26 = 0;
-                    if (num23 >= 0L)
+                    long num_acc_charged = 0;
+                    long num_acc_discharged = 0;
+                    //
+                    // Do acc charge or discharge
+                    //
+                    if (num_energy_margin >= 0L)
                     {
-                        for (int index2 = 0; index2 < count4; ++index2)
+                        for (int index7 = 0; index7 < count4; ++index7)
                         {
-                            int index3 = accumulators[index2];
-                            powerSystem.accPool[index3].curPower = 0L;
-                            long num10 = powerSystem.accPool[index3].InputCap();
-                            if (num10 > 0L)
+                            int index8 = accumulators[index7];
+                            powerSystem.accPool[index8].curPower = 0L;
+                            long num33 = powerSystem.accPool[index8].InputCap();
+                            if (num33 > 0L)
                             {
-                                long num11 = num10 < num23 ? num10 : num23;
-                                powerSystem.accPool[index3].curEnergy += num11;
-                                powerSystem.accPool[index3].curPower = num11;
-                                num23 -= num11;
-                                num25 += num11;
-                                num4 += num11;
+                                long num34 = num33 < num_energy_margin ? num33 : num_energy_margin;
+                                powerSystem.accPool[index8].curEnergy += num34;
+                                powerSystem.accPool[index8].curPower = num34;
+                                num_energy_margin -= num34;
+                                num_acc_charged += num34;
+                                num_power_charge += num34;
                             }
-                            powerNetwork.energyStored += powerSystem.accPool[index3].curEnergy;
-                            int entityId = powerSystem.accPool[index3].entityId;
-                            entityAnimPool[entityId].state = powerSystem.accPool[index3].curEnergy > 0L ? 1U : 0U;
-                            entityAnimPool[entityId].power = (float)powerSystem.accPool[index3].curEnergy / (float)powerSystem.accPool[index3].maxEnergy;
+                            powerNetwork.energyStored += powerSystem.accPool[index8].curEnergy;
+                            int entityId = powerSystem.accPool[index8].entityId;
+                            entityAnimPool[entityId].state = powerSystem.accPool[index8].curEnergy > 0L ? 1U : 0U;
+                            entityAnimPool[entityId].power = (float)powerSystem.accPool[index8].curEnergy / (float)powerSystem.accPool[index8].maxEnergy;
                         }
                     }
                     else
                     {
-                        long num10 = -num23;
-                        for (int index2 = 0; index2 < count4; ++index2)
+                        long num35 = -num_energy_margin;
+                        for (int index9 = 0; index9 < count4; ++index9)
                         {
-                            int index3 = accumulators[index2];
-                            powerSystem.accPool[index3].curPower = 0L;
-                            long num11 = powerSystem.accPool[index3].OutputCap();
-                            if (num11 > 0L)
+                            int index10 = accumulators[index9];
+                            powerSystem.accPool[index10].curPower = 0L;
+                            long num36 = powerSystem.accPool[index10].OutputCap();
+                            if (num36 > 0L)
                             {
-                                long num12 = num11 < num10 ? num11 : num10;
-                                powerSystem.accPool[index3].curEnergy -= num12;
-                                powerSystem.accPool[index3].curPower = -num12;
-                                num10 -= num12;
-                                num26 += num12;
-                                num3 += num12;
+                                long num37 = num36 < num35 ? num36 : num35;
+                                powerSystem.accPool[index10].curEnergy -= num37;
+                                powerSystem.accPool[index10].curPower = -num37;
+                                num35 -= num37;
+                                num_acc_discharged += num37;
+                                num_power_discharge += num37;
                             }
-                            powerNetwork.energyStored += powerSystem.accPool[index3].curEnergy;
-                            int entityId = powerSystem.accPool[index3].entityId;
-                            entityAnimPool[entityId].state = powerSystem.accPool[index3].curEnergy > 0L ? 2U : 0U;
-                            entityAnimPool[entityId].power = (float)powerSystem.accPool[index3].curEnergy / (float)powerSystem.accPool[index3].maxEnergy;
+                            powerNetwork.energyStored += powerSystem.accPool[index10].curEnergy;
+                            int entityId = powerSystem.accPool[index10].entityId;
+                            entityAnimPool[entityId].state = powerSystem.accPool[index10].curEnergy > 0L ? 2U : 0U;
+                            entityAnimPool[entityId].power = (float)powerSystem.accPool[index10].curEnergy / (float)powerSystem.accPool[index10].maxEnergy;
                         }
                     }
                     /* Code Analysis Note: until this line
                      * NOTE: powerNetwork.exportDemandRatio = 1.0 - (1.0 - powerNetwork.exportDemandRatio) * (1.0 - planetAtField.fillDemandRatio); regarding ATFields
                      * 
-                     * num21 = ExcOutCap
-                     * num18 = ExcOutCap + GenCap
-                     * num1 = GenCap
-                     * num2 = ConsReq
-                     * num22 = ExcInpCap
-                     * num24 = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
-                     * num9 = ConsReq + EnergyExport
-                     * num4 = num25 = AccCharged
-                     * num26 = num3 = AccDischarged
-                     * num23 = ExcOutCap + GenCap - ConsReq - EnergyExport - AccCharged  => this value determine following Exc should charge                     * 
+                     * capExcDischarge = ExcOutCap
+                     * capGenAndExc = ExcOutCap + GenCap
+                     * num_power_gen_cap = GenCap
+                     * num_cons_req = ConsReq
+                     * num_exc_input_cap = ExcInpCap
+                     * num_energy_at_field_charge = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
+                     * num_energy_req = ConsReq + EnergyExport
+                     * num_power_charge = num_acc_charged = AccCharged
+                     * num_acc_discharged = num_power_discharge = AccDischarged
+                     * num_energy_margin = ExcOutCap + GenCap - ConsReq - EnergyExport - AccCharged  => this value determine following Exc should charge                     * 
                      */
 
                     /* Patch note : */
-                    //double num27 = num23 < num22 ? (double)num23 / (double)num22 : 1.0;
-                    num23 -= num21; // Exclude exchanger output
-                    num23 = num23 > 0 ? num23 : 0;
-                    double num27 = num23 < num22 ? (double)num23 / (double)num22 : 1.0;
+                    //double num_exc_charge_work_ratio = num_energy_margin < num_exc_input_cap ? (double) num_energy_margin / (double) num_exc_input_cap : 1.0;
+                    num_energy_margin -= num_exc_output_cap; // Exclude exchanger output
+                    num_energy_margin = num_energy_margin > 0 ? num_energy_margin : 0;
+                    double num_exc_charge_work_ratio = num_energy_margin < num_exc_input_cap ? (double)num_energy_margin / (double)num_exc_input_cap : 1.0;
                     /* Patch End
-                    /* Code Analysis Note: ExcChargeWorkRatio = num27 = num23/num22 limited by <=1 */
-                    for (int index2 = 0; index2 < count2; ++index2)
+                    /* Code Analysis Note: ExcChargeWorkRatio = num_exc_charge_work_ratio = num_energy_margin/num_exc_input_cap limited by <=1 */
+
+                    //
+                    // Do exchanger charge
+                    //
+                    for (int index11 = 0; index11 < count2; ++index11)
                     {
-                        int index3 = exchangers[index2];
-                        if ((double)powerSystem.excPool[index3].state >= 1.0 && num27 >= 0.0)
+                        int index12 = exchangers[index11];
+                        if ((double)powerSystem.excPool[index12].state >= 1.0 && num_exc_charge_work_ratio >= 0.0)
                         {
-                            long num10 = (long)(num27 * (double)powerSystem.excPool[index3].capsCurrentTick + 0.99999);
-                            long remaining = num23 < num10 ? num23 : num10;
-                            long num11 = powerSystem.excPool[index3].InputUpdate(remaining, entityAnimPool, productRegister, consumeRegister);
-                            num23 -= num11;
-                            num19 += num11;
-                            num4 += num11;
+                            long num39 = (long)(num_exc_charge_work_ratio * (double)powerSystem.excPool[index12].capsCurrentTick + 0.99999);
+                            long remaining = num_energy_margin < num39 ? num_energy_margin : num39;
+                            long num40 = powerSystem.excPool[index12].InputUpdate(remaining, entityAnimPool, productRegister, consumeRegister);
+                            num_energy_margin -= num40;
+                            num_exc_charged_total += num40;
+                            num_power_charge += num40;
                         }
                         else
-                            powerSystem.excPool[index3].currEnergyPerTick = 0L;
+                            powerSystem.excPool[index12].currEnergyPerTick = 0L;
                     }
 
                     /* Code Analysis Note: until this line
                      * NOTE: powerNetwork.exportDemandRatio = 1.0 - (1.0 - powerNetwork.exportDemandRatio) * (1.0 - planetAtField.fillDemandRatio); regarding ATFields
                      * 
-                     * num21 = ExcOutCap
-                     * num18 = ExcOutCap + GenCap
-                     * num1 = GenCap
-                     * num2 = ConsReq
-                     * num22 = ExcInpCap
-                     * num24 = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
-                     * num9 = ConsReq + EnergyExport
-                     * num23 = ExcOutCap + GenCap - ConsReq - EnergyExport - AccCharged - ExcCharged  => should be 0 that remain nothing
-                     * num19 = ExcCharged => Exchanger has lowest charge priority
-                     * num4 = AccCharged + ExcCharged
-                     * num25 = AccCharged
-                     * num26 = num3 = AccDischarged
+                     * capExcDischarge = ExcOutCap
+                     * capGenAndExc = ExcOutCap + GenCap
+                     * num_power_gen_cap = GenCap
+                     * num_cons_req = ConsReq
+                     * num_exc_input_cap = ExcInpCap
+                     * num_energy_at_field_charge = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
+                     * num_energy_req = ConsReq + EnergyExport
+                     * num_energy_margin = ExcOutCap + GenCap - ConsReq - EnergyExport - AccCharged - ExcCharged  => should be 0 that remain nothing
+                     * num_exc_charged_total = ExcCharged => Exchanger has lowest charge priority
+                     * num_power_charge = AccCharged + ExcCharged
+                     * num_acc_charged = AccCharged
+                     * num_acc_discharged = num_power_discharge = AccDischarged
                      */
 
-                    // num28 = (ExcOutCap + GenCap) < (ConsReq + EnergyExport) + ExcCharged ? (ExcOutCap + GenCap) + AccCharged + ExcCharged :  (CosmPowerReq + ExportReq) +  AccCharged + ExcCharged; 
-                    // Following loop will calculate energy actually discharged, num28 will determine energy should be discharged from exchangers
-                    long num28 = num18 < num9 + num19 ? num18 + num25 + num19 : num9 + num25 + num19;
+                    // energyDebt = (ExcOutCap + GenCap) < (ConsReq + EnergyExport) + ExcCharged ? (ExcOutCap + GenCap) + AccCharged + ExcCharged :  (CosmPowerReq + ExportReq) +  AccCharged + ExcCharged; 
+                    // Following loop will calculate energy actually discharged, energyDebt will determine energy should be discharged from exchangers
+                    long num_energy_debt = num_gen_exc_output_cap < num_energy_req + num_exc_charged_total ? num_gen_exc_output_cap + num_acc_charged + num_exc_charged_total : num_energy_req + num_acc_charged + num_exc_charged_total;
                     //Patch note: change the exchanger discharge target
-                    double num29;
-                    {
-                        long energyToGenerate;
-                        long energyExcDischarge;
-                        switch (ExchangerDischargeStrategy)
-                        {
-                            default:
-                            case EExchangerDischargeStrategy.EQUAL_AS_FUEL_GENERATOR:
-                                long fuelAndDiscCap = (num18 - cleanEnergyGeneratorCap);
-                                energyToGenerate = num28 - cleanEnergyGeneratorCap;
-                                num29 = (fuelAndDiscCap <=  0 || energyToGenerate <= 0)  ? 0.0 : 
-                                        (energyToGenerate < fuelAndDiscCap) ? ((double)energyToGenerate / (double)fuelAndDiscCap) : 1.0;
-                                break;
-                            case EExchangerDischargeStrategy.DISCHARGE_FIRST:
-                                energyToGenerate = cleanEnergyGeneratorCap;
-                                energyExcDischarge = num28 > energyToGenerate ? num28 - energyToGenerate : 0;
-                                num29 = energyExcDischarge < num21 ? (double)energyExcDischarge / (double)num21 : 1.0;
-                                break;
-                            case EExchangerDischargeStrategy.DISCHARGE_LAST:
-                                energyToGenerate = num18 - num21;
-                                energyExcDischarge = num28 > energyToGenerate ? num28 - energyToGenerate : 0;
-                                num29 = energyExcDischarge < num21 ? (double)energyExcDischarge / (double)num21 : 1.0;
-                                break;
+                    double num_exc_discharge_ratio;
+                    num_exc_discharge_ratio = CalculateDischargeRatio(num_gen_exc_output_cap, num_exc_output_cap, cleanEnergyGeneratorCap, num_energy_debt);
 
-                        }
-                    }
-
-                    for (int index2 = 0; index2 < count2; ++index2)
+                    //
+                    // Do exchanger discharge
+                    //
+                    for (int index13 = 0; index13 < count2; ++index13)
                     {
-                        int index3 = exchangers[index2];
-                        if ((double)powerSystem.excPool[index3].state <= -1.0)
+                        int index14 = exchangers[index13];
+                        if ((double)powerSystem.excPool[index14].state <= -1.0)
                         {
-                            long num10 = (long)(num29 * (double)powerSystem.excPool[index3].capsCurrentTick + 0.99999);
-                            long energyPay = num28 < num10 ? num28 : num10;
-                            long num11 = powerSystem.excPool[index3].OutputUpdate(energyPay, entityAnimPool, productRegister, consumeRegister);
-                            num20 += num11;
-                            num3 += num11;
-                            num28 -= num11;
+                            long num43 = (long)(num_exc_discharge_ratio * (double)powerSystem.excPool[index14].capsCurrentTick + 0.99999);
+                            long energyPay = num_energy_debt < num43 ? num_energy_debt : num43;
+                            long num44 = powerSystem.excPool[index14].OutputUpdate(energyPay, entityAnimPool, productRegister, consumeRegister);
+                            num_exc_discharged_total += num44;
+                            num_power_discharge += num44;
+                            num_energy_debt -= num44;
                         }
                     }
 
                     /* Code Analysis Note: until this line
                      * NOTE: powerNetwork.exportDemandRatio = 1.0 - (1.0 - powerNetwork.exportDemandRatio) * (1.0 - planetAtField.fillDemandRatio); regarding ATFields
                      * 
-                     * num21 = ExcOutCap
-                     * num18 = ExcOutCap + GenCap
-                     * num1 = GenCap
-                     * num2 = ConsReq
-                     * num22 = ExcInpCap
-                     * num24 = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
-                     * num9 = ConsReq + EnergyExport
-                     * num23 = ExcOutCap + GenCap - ConsReq - EnergyExport - AccCharged - ExcCharged  => should be 0 that remain nothing
-                     * num19 = ExcCharged => Exchanger has lowest charge priority
-                     * num4 = AccCharged + ExcCharged = TotalCharge
-                     * num25 = AccCharged
-                     * num26 = AccDischarged
-                     * num3 = AccDischarged + ExcDischarged = TotalDischarge
-                     * num28 = (ExcOutCap + GenCap) + AccCharged + ExcCharged - ExcDischarged =>(not enough power)
+                     * capExcDischarge = ExcOutCap
+                     * capGenAndExc = ExcOutCap + GenCap
+                     * num_power_gen_cap = GenCap
+                     * num_cons_req = ConsReq
+                     * num_exc_input_cap = ExcInpCap
+                     * num_energy_at_field_charge = EnergyExport = (ExcOutCap + GenCap - ConsReq) * exportDemandRatio + 0.5
+                     * num_energy_req = ConsReq + EnergyExport
+                     * num_energy_margin = ExcOutCap + GenCap - ConsReq - EnergyExport - AccCharged - ExcCharged  => should be 0 that remain nothing
+                     * num_exc_charged_total = ExcCharged => Exchanger has lowest charge priority
+                     * num_power_charge = AccCharged + ExcCharged = TotalCharge
+                     * num_acc_charged = AccCharged
+                     * num_acc_discharged = AccDischarged
+                     * num_power_discharge = AccDischarged + ExcDischarged = TotalDischarge
+                     * energyDebt = (ExcOutCap + GenCap) + AccCharged + ExcCharged - ExcDischarged =>(not enough power)
                      * or    = (CosmPowerReq + EnergyExport) +  AccCharged + ExcCharged  - ExcDischarged=>(enough power)
-                     * num29 = ExcDischargeWorkRatio
-                     * num20 = num3 = ExcDischarged
+                     * excDischargeRatio = ExcDischargeWorkRatio
+                     * num_exc_discharged_total = num_power_discharge = ExcDischarged
                      */
 
-                    powerNetwork.energyCapacity = num18 - num21;//GenCap = (ExcOutCap + GenCap) - ExcOutCap
-                    powerNetwork.energyRequired = num9 - num24;//ConsReq = (CosmReq + EnergyExport) - EnergyExport
-                    powerNetwork.energyExport = num24;//EnergyExport
-                    powerNetwork.energyServed = num18 + num26 < num9 ? num18 + num26 : num9;// ExcOutCap + GenCap + AccDischarged < (CosmPowerReq + EnergyExport)？ ExcOutCap + GenCap + AccDischarged  ： (CosmPowerReq + ExportReq)
-                    powerNetwork.energyAccumulated = num25 - num26;//AccEnergy = AccCharged - AccDischarged
-                    powerNetwork.energyExchanged = num19 - num20;//ExcCharged - ExcDischarged
-                    powerNetwork.energyExchangedInputTotal = num19;//ExcCharged
-                    powerNetwork.energyExchangedOutputTotal = num20;//ExcDischarged
-                    if (num24 > 0L)
+                    powerNetwork.energyCapacity = num_gen_exc_output_cap - num_exc_output_cap;//GenCap = (ExcOutCap + GenCap) - ExcOutCap
+                    powerNetwork.energyRequired = num_energy_req - num_energy_at_field_charge;//ConsReq = (CosmReq + EnergyExport) - EnergyExport
+                    powerNetwork.energyExport = num_energy_at_field_charge;//EnergyExport
+                    powerNetwork.energyServed = num_gen_exc_output_cap + num_acc_discharged < num_energy_req ? num_gen_exc_output_cap + num_acc_discharged : num_energy_req;// ExcOutCap + GenCap + AccDischarged < (CosmPowerReq + EnergyExport)？ ExcOutCap + GenCap + AccDischarged  ： (CosmPowerReq + ExportReq)
+                    powerNetwork.energyAccumulated = num_acc_charged - num_acc_discharged;//AccEnergy = AccCharged - AccDischarged
+                    powerNetwork.energyExchanged = num_exc_charged_total - num_exc_discharged_total;//ExcCharged - ExcDischarged
+                    powerNetwork.energyExchangedInputTotal = num_exc_charged_total;//ExcCharged
+                    powerNetwork.energyExchangedOutputTotal = num_exc_discharged_total;//ExcDischarged
+                    if (num_energy_at_field_charge > 0L)
                     {
                         PlanetATField planetAtField = powerSystem.factory.planetATField;
-                        planetAtField.energy += num24;
-                        planetAtField.atFieldRechargeCurrent = num24 * 60L;
+                        planetAtField.energy += num_energy_at_field_charge;
+                        planetAtField.atFieldRechargeCurrent = num_energy_at_field_charge * 60L;
                     }
-                    long num30 = num18 + num26; //(ExcOutCap + GenCap) + AccDischargeCap = TotalPowerCap
-                    long num31 = num9 + num25; //(CosmReq + ExportReq) + AccChargeReq = TotalPowerReq
-                    num5 += num30 >= num31 ? num2 + num24 : num30; // if (TotalPowerCap > TotalPowerReq) (num5 = CosmPowerReq + energyExport) else num5 = totalPowerCap
-                    long num32 = num20 - num31 > 0L ? num20 - num31 : 0L;// ExcOutputMargin = (ExcDischarged - TotalPowerReq) under limited by 0??
-                    double num33 = num30 >= num31 ? 1.0 : (double)num30 / (double)num31; //ConsumerRatio = TotalPowerCap / TotalPowerReq, upper limited by 1
-                    long num34 = num31 + (num19 - num32); // ? num34 = TotalPowerReq + ExcCharged - max(0, (ExcDischarged - TotalPowerReq)) almost = TotalPowerReq + ExcCharged
-                    long num35 = num30 - num20;// ?????EnergyCanServeByAccAndGen = (ExcOutCap + GenCap) + AccDischarged - ExcDischarged
-                    double num36 = num35 > num34 ? (double)num34 / (double)num35 : 1.0;//GenerateRatio =  EnergyReqGen/EnergyCanServeByAccAndGen upper limited by 1
-                    powerNetwork.consumerRatio = num33;
-                    powerNetwork.generaterRatio = num36;
-                    float num37 = num35 > 0L || powerNetwork.energyStored > 0L || num20 > 0L ? (float)num33 : 0.0f;
-                    float num38 = num35 > 0L || powerNetwork.energyStored > 0L || num20 > 0L ? (float)num36 : 0.0f; //If not EnergyReqGen or energyStored or ExcOutput, set 0
-                    powerSystem.networkServes[index1] = num37;
-                    powerSystem.networkGenerates[index1] = num38;
+                    long num_power_cap_with_acc = num_gen_exc_output_cap + num_acc_discharged;
+                    long num_power_req_with_acc = num_energy_req + num_acc_charged;
+                    // if (TotalPowerCap > TotalPowerReq) (num_energy_cons_stat = CosmPowerReq + energyExport) else num_energy_cons_stat = totalPowerCap
+                    num_energy_cons_stat += num_power_cap_with_acc >= num_power_req_with_acc ? num_cons_req + num_energy_at_field_charge : num_power_cap_with_acc;
+                    // ExcOutputMargin = (ExcDischarged - TotalPowerReq) under limited by 0??
+                    long num_energy_margin_with_only_exc = num_exc_discharged_total - num_power_req_with_acc > 0L ? num_exc_discharged_total - num_power_req_with_acc : 0L;
+                    //ConsumerRatio = TotalPowerCap / TotalPowerReq, upper limited by 1
+                    double num_cons_ratio = num_power_cap_with_acc >= num_power_req_with_acc ? 1.0 : (double)num_power_cap_with_acc / (double)num_power_req_with_acc;
+                    // ? num_energy_need_serve = TotalPowerReq + ExcCharged - max(0, (ExcDischarged - TotalPowerReq)) almost = TotalPowerReq + ExcCharged
+                    long num_energy_need_serve = num_power_req_with_acc + (num_exc_charged_total - num_energy_margin_with_only_exc);
+                    // ?????EnergyCanServeByAccAndGen = (ExcOutCap + GenCap) + AccDischarged - ExcDischarged
+                    long num_energy_can_serve = num_power_cap_with_acc - num_exc_discharged_total;
+                    //GenerateRatio =  EnergyReqGen/EnergyCanServeByAccAndGen upper limited by 1
+                    double num_gen_work_ratio = num_energy_can_serve > num_energy_need_serve ? (double)num_energy_need_serve / (double)num_energy_can_serve : 1.0;
+                    powerNetwork.consumerRatio = num_cons_ratio;
+                    powerNetwork.generaterRatio = num_gen_work_ratio;
+                    float num_network_serve_ratio = num_energy_can_serve > 0L || powerNetwork.energyStored > 0L || num_exc_discharged_total > 0L ? (float)num_cons_ratio : 0.0f;
+                    //If not EnergyReqGen or energyStored or ExcOutput, set 0
+                    float num_network_gen_ratio = num_energy_can_serve > 0L || powerNetwork.energyStored > 0L || num_exc_discharged_total > 0L ? (float)num_gen_work_ratio : 0.0f;
+                    powerSystem.networkServes[index1] = num_network_serve_ratio;
+                    powerSystem.networkGenerates[index1] = num_network_gen_ratio;
 
-                    //Patch Note : Calculate clean energy generator generaterRatio, and fuel generaterRatio seperately and apply to them 
-                    long totalEnergyNeedGenerate = num28;
-                    long fuelEnergyCap = powerNetwork.energyCapacity - cleanEnergyGeneratorCap;
-                    double generatorRatioClean = 1.0;
+                    double generatorRatioClean, generatorRatioFuel;
+                    CalculateGeneratorLoadRatio(powerNetwork, cleanEnergyGeneratorCap, num_energy_debt, out generatorRatioClean, out generatorRatioFuel);
 
-                    // Different from origin calculation which ignores energy input energy from exchanger => some time generator may stop
-                    // this ratio will make every fuel works equally
-
-                    double generatorRatioFuel = ((double)totalEnergyNeedGenerate - (double)cleanEnergyGeneratorCap) / ((double)fuelEnergyCap + 0.001);
-                    generatorRatioFuel = generatorRatioFuel > 1.0 ? 1.0 : generatorRatioFuel;
-
-                    if (generatorRatioFuel < 0.0)
+                    // Do energy request distribution on each generator
+                    for (int index15 = 0; index15 < count3; ++index15)
                     {
-                        generatorRatioFuel = 0.0;
-                        generatorRatioClean = (double)totalEnergyNeedGenerate / ((double)cleanEnergyGeneratorCap + 0.001);
-                        generatorRatioClean = generatorRatioClean > 1.0 ? 1.0 : generatorRatioClean;
-                    }
-
-                    //Patch end
-                    for (int index2 = 0; index2 < count3; ++index2)
-                    {
-                        int index3 = generators[index2];
+                        int index16 = generators[index15];
                         long energy = 0;
                         float _speed1 = 1f;
-                        bool flag3 = !powerSystem.genPool[index3].wind && !powerSystem.genPool[index3].photovoltaic && !powerSystem.genPool[index3].gamma && !powerSystem.genPool[index3].geothermal;
-                        if (flag3)
-                            powerSystem.genPool[index3].currentStrength = num28 <= 0L || powerSystem.genPool[index3].capacityCurrentTick <= 0L ? 0.0f : 1f;
-                        if (num28 > 0L && powerSystem.genPool[index3].productId == 0)
+                        bool flag5 = !powerSystem.genPool[index16].wind && !powerSystem.genPool[index16].photovoltaic && !powerSystem.genPool[index16].gamma && !powerSystem.genPool[index16].geothermal;
+                        if (flag5)
+                            powerSystem.genPool[index16].currentStrength = num_energy_debt <= 0L || powerSystem.genPool[index16].capacityCurrentTick <= 0L ? 0.0f : 1f;
+                        if (num_energy_debt > 0L && powerSystem.genPool[index16].productId == 0)
                         {
                             /* Patch note: if generator uses clean energy, make it output max energy */
-                            double generaterRatio = flag3 ? generatorRatioFuel : generatorRatioClean;
-                            long num10 = (long)(generaterRatio * (double)powerSystem.genPool[index3].capacityCurrentTick + 0.99999);
+                            double generaterRatio = flag5 ? generatorRatioFuel : generatorRatioClean;
+                            long num54 = (long)(generaterRatio * (double)powerSystem.genPool[index16].capacityCurrentTick + 0.99999);
 
-                            energy = num28 < num10 ? num28 : num10;
+                            energy = num_energy_debt < num54 ? num_energy_debt : num54;
                             if (energy > 0L)
                             {
-                                num28 -= energy;
-                                if (flag3)
+                                num_energy_debt -= energy;
+                                if (flag5)
                                 {
-                                    powerSystem.genPool[index3].GenEnergyByFuel(energy, consumeRegister);
+                                    powerSystem.genPool[index16].GenEnergyByFuel(energy, consumeRegister);
                                     _speed1 = 2f;
                                 }
                             }
                         }
-                        powerSystem.genPool[index3].generateCurrentTick = energy;
-                        int entityId = powerSystem.genPool[index3].entityId;
-                        if (powerSystem.genPool[index3].wind)
+                        powerSystem.genPool[index16].generateCurrentTick = energy;
+                        int entityId = powerSystem.genPool[index16].entityId;
+                        if (powerSystem.genPool[index16].wind)
                         {
                             float _speed2 = 0.7f;
-                            entityAnimPool[entityId].Step2((double)entityAnimPool[entityId].power > 0.100000001490116 || energy > 0L ? 1U : 0U, _dt, windStrength, _speed2);
+                            entityAnimPool[entityId].Step2((double)entityAnimPool[entityId].power > 0.10000000149011612 || energy > 0L ? 1U : 0U, _dt, windStrength, _speed2);
                         }
-                        else if (powerSystem.genPool[index3].gamma)
+                        else if (powerSystem.genPool[index16].gamma)
                         {
-                            bool keyFrame = (index3 + num8) % 90 == 0;
-                            powerSystem.genPool[index3].GameTick_Gamma(useIonLayer, useCata, keyFrame, powerSystem.factory, productRegister, consumeRegister);
+                            bool keyFrame = (index16 + num9) % 90 == 0;
+                            powerSystem.genPool[index16].GameTick_Gamma(useIonLayer, useCata, keyFrame, powerSystem.factory, productRegister, consumeRegister);
                             entityAnimPool[entityId].time += _dt;
                             if ((double)entityAnimPool[entityId].time > 1.0)
                                 --entityAnimPool[entityId].time;
-                            entityAnimPool[entityId].power = (float)powerSystem.genPool[index3].capacityCurrentTick / (float)powerSystem.genPool[index3].genEnergyPerTick;
-                            entityAnimPool[entityId].state = (uint)((powerSystem.genPool[index3].productId > 0 ? 2 : 0) + (powerSystem.genPool[index3].catalystPoint > 0 ? 1 : 0));
-                            entityAnimPool[entityId].working_length = (float)((double)entityAnimPool[entityId].working_length * 0.990000009536743 + (powerSystem.genPool[index3].catalystPoint > 0 ? 0.00999999977648258 : 0.0));
+                            entityAnimPool[entityId].power = (float)powerSystem.genPool[index16].capacityCurrentTick / (float)powerSystem.genPool[index16].genEnergyPerTick;
+                            entityAnimPool[entityId].state = (uint)((powerSystem.genPool[index16].productId > 0 ? 2 : 0) + (powerSystem.genPool[index16].catalystPoint > 0 ? 1 : 0));
+                            entityAnimPool[entityId].working_length = (float)((double)entityAnimPool[entityId].working_length * 0.99000000953674316 + (powerSystem.genPool[index16].catalystPoint > 0 ? 0.0099999997764825821 : 0.0));
                             if (isActive)
-                                entitySignPool[entityId].signType = (double)powerSystem.genPool[index3].productCount < 20.0 ? 0U : 6U;
+                                entitySignPool[entityId].signType = (double)powerSystem.genPool[index16].productCount < 20.0 ? 0U : 6U;
                         }
-                        else if (powerSystem.genPool[index3].fuelMask > (short)1)
+                        else if (powerSystem.genPool[index16].fuelMask > (short)1)
                         {
                             float _power = (float)((double)entityAnimPool[entityId].power * 0.98 + 0.02 * (energy > 0L ? 1.0 : 0.0));
                             if (energy > 0L && (double)_power < 0.0)
                                 _power = 0.0f;
-                            entityAnimPool[entityId].Step2((double)entityAnimPool[entityId].power > 0.100000001490116 || energy > 0L ? 1U : 0U, _dt, _power, _speed1);
+                            entityAnimPool[entityId].Step2((double)entityAnimPool[entityId].power > 0.10000000149011612 || energy > 0L ? 1U : 0U, _dt, _power, _speed1);
                         }
-                        else if (powerSystem.genPool[index3].geothermal)
+                        else if (powerSystem.genPool[index16].geothermal)
                         {
-                            float num10 = powerSystem.genPool[index3].warmup + powerSystem.genPool[index3].warmupSpeed;
-                            powerSystem.genPool[index3].warmup = (double)num10 > 1.0 ? 1f : ((double)num10 < 0.0 ? 0.0f : num10);
+                            float num55 = powerSystem.genPool[index16].warmup + powerSystem.genPool[index16].warmupSpeed;
+                            powerSystem.genPool[index16].warmup = (double)num55 > 1.0 ? 1f : ((double)num55 < 0.0 ? 0.0f : num55);
                             entityAnimPool[entityId].state = energy > 0L ? 1U : 0U;
                             entityAnimPool[entityId].Step(entityAnimPool[entityId].state, _dt, 2f, 0.0f);
-                            entityAnimPool[entityId].working_length = powerSystem.genPool[index3].warmup;
+                            entityAnimPool[entityId].working_length = powerSystem.genPool[index16].warmup;
                             if (energy > 0L)
                             {
                                 if ((double)entityAnimPool[entityId].power < 1.0)
@@ -594,56 +582,56 @@ namespace PowerSystemTweek
                             }
                             else if ((double)entityAnimPool[entityId].power > 0.0)
                                 entityAnimPool[entityId].power -= _dt / 6f;
-                            entityAnimPool[entityId].prepare_length += (float)(3.14159274101257 * (double)_dt / 8.0);
-                            if ((double)entityAnimPool[entityId].prepare_length > 6.28318548202515)
-                                entityAnimPool[entityId].prepare_length -= 6.283185f;
+                            entityAnimPool[entityId].prepare_length += (float)(3.1415927410125732 * (double)_dt / 8.0);
+                            if ((double)entityAnimPool[entityId].prepare_length > 6.2831854820251465)
+                                entityAnimPool[entityId].prepare_length -= 6.28318548f;
                         }
                         else
                         {
-                            float _power = (float)((double)entityAnimPool[entityId].power * 0.98 + 0.02 * (double)energy / (double)powerSystem.genPool[index3].genEnergyPerTick);
-                            if (energy > 0L && (double)_power < 0.200000002980232)
+                            float _power = (float)((double)entityAnimPool[entityId].power * 0.98 + 0.02 * (double)energy / (double)powerSystem.genPool[index16].genEnergyPerTick);
+                            if (energy > 0L && (double)_power < 0.20000000298023224)
                                 _power = 0.2f;
-                            entityAnimPool[entityId].Step2((double)entityAnimPool[entityId].power > 0.100000001490116 || energy > 0L ? 1U : 0U, _dt, _power, _speed1);
+                            entityAnimPool[entityId].Step2((double)entityAnimPool[entityId].power > 0.10000000149011612 || energy > 0L ? 1U : 0U, _dt, _power, _speed1);
                         }
                     }
                 }
             }
             lock (factoryProductionStat)
             {
-                factoryProductionStat.powerGenRegister = num1;
-                factoryProductionStat.powerConRegister = num2;
-                factoryProductionStat.powerDisRegister = num3;
-                factoryProductionStat.powerChaRegister = num4;
-                factoryProductionStat.energyConsumption += num5;
+                factoryProductionStat.powerGenRegister = num_power_gen_cap;
+                factoryProductionStat.powerConRegister = num_cons_req;
+                factoryProductionStat.powerDisRegister = num_power_discharge;
+                factoryProductionStat.powerChaRegister = num_power_charge;
+                factoryProductionStat.energyConsumption += num_energy_cons_stat;
             }
             if (isActive)
             {
-                for (int index1 = 0; index1 < powerSystem.netCursor; ++index1)
+                for (int index17 = 0; index17 < powerSystem.netCursor; ++index17)
                 {
-                    PowerNetwork powerNetwork = powerSystem.netPool[index1];
-                    if (powerNetwork != null && powerNetwork.id == index1)
+                    PowerNetwork powerNetwork = powerSystem.netPool[index17];
+                    if (powerNetwork != null && powerNetwork.id == index17)
                     {
                         List<int> consumers = powerNetwork.consumers;
                         int count = consumers.Count;
-                        if (index1 == 0)
+                        if (index17 == 0)
                         {
-                            for (int index2 = 0; index2 < count; ++index2)
-                                entitySignPool[powerSystem.consumerPool[consumers[index2]].entityId].signType = 1U;
+                            for (int index18 = 0; index18 < count; ++index18)
+                                entitySignPool[powerSystem.consumerPool[consumers[index18]].entityId].signType = 1U;
                         }
-                        else if (powerNetwork.consumerRatio < 0.100000001490116)
+                        else if (powerNetwork.consumerRatio < 0.10000000149011612)
                         {
-                            for (int index2 = 0; index2 < count; ++index2)
-                                entitySignPool[powerSystem.consumerPool[consumers[index2]].entityId].signType = 2U;
+                            for (int index19 = 0; index19 < count; ++index19)
+                                entitySignPool[powerSystem.consumerPool[consumers[index19]].entityId].signType = 2U;
                         }
                         else if (powerNetwork.consumerRatio < 0.5)
                         {
-                            for (int index2 = 0; index2 < count; ++index2)
-                                entitySignPool[powerSystem.consumerPool[consumers[index2]].entityId].signType = 3U;
+                            for (int index20 = 0; index20 < count; ++index20)
+                                entitySignPool[powerSystem.consumerPool[consumers[index20]].entityId].signType = 3U;
                         }
                         else
                         {
-                            for (int index2 = 0; index2 < count; ++index2)
-                                entitySignPool[powerSystem.consumerPool[consumers[index2]].entityId].signType = 0U;
+                            for (int index21 = 0; index21 < count; ++index21)
+                                entitySignPool[powerSystem.consumerPool[consumers[index21]].entityId].signType = 0U;
                         }
                     }
                 }
@@ -657,18 +645,18 @@ namespace PowerSystemTweek
                     if (powerSystem.nodePool[index].isCharger)
                     {
                         float networkServe = powerSystem.networkServes[networkId];
-                        int num9 = powerSystem.nodePool[index].requiredEnergy - powerSystem.nodePool[index].idleEnergyPerTick;
+                        int num56 = powerSystem.nodePool[index].requiredEnergy - powerSystem.nodePool[index].idleEnergyPerTick;
                         if ((double)powerSystem.nodePool[index].coverRadius < 20.0)
-                            entityAnimPool[entityId].StepPoweredClamped(networkServe, _dt, num9 > 0 ? 2U : 1U);
+                            entityAnimPool[entityId].StepPoweredClamped(networkServe, _dt, num56 > 0 ? 2U : 1U);
                         else
-                            entityAnimPool[entityId].StepPoweredClamped2(networkServe, _dt, num9 > 0 ? 2U : 1U);
-                        if (num9 > 0 && entityAnimPool[entityId].state == 2U)
+                            entityAnimPool[entityId].StepPoweredClamped2(networkServe, _dt, num56 > 0 ? 2U : 1U);
+                        if (num56 > 0 && entityAnimPool[entityId].state == 2U)
                         {
                             lock (mainPlayer.mecha)
                             {
-                                int num10 = (int)((double)num9 * (double)networkServe);
-                                mainPlayer.mecha.coreEnergy += (double)num10;
-                                mainPlayer.mecha.MarkEnergyChange(2, (double)num10);
+                                int change = (int)((double)num56 * (double)networkServe);
+                                mainPlayer.mecha.coreEnergy += (double)change;
+                                mainPlayer.mecha.MarkEnergyChange(2, (double)change);
                                 mainPlayer.mecha.AddChargerDevice(entityId);
                                 if (mainPlayer.mecha.coreEnergy > mainPlayer.mecha.coreEnergyCap)
                                     mainPlayer.mecha.coreEnergy = mainPlayer.mecha.coreEnergyCap;
@@ -678,13 +666,80 @@ namespace PowerSystemTweek
                     else if (entityPool[entityId].powerGenId == 0 && entityPool[entityId].powerAccId == 0 && entityPool[entityId].powerExcId == 0)
                     {
                         float networkServe = powerSystem.networkServes[networkId];
-                        entityAnimPool[entityId].Step2((double)networkServe > 0.100000001490116 ? 1U : 0U, _dt, (float)((double)entityAnimPool[entityId].power * 0.97 + 0.03 * (double)networkServe), 0.4f);
+                        entityAnimPool[entityId].Step2((double)networkServe > 0.10000000149011612 ? 1U : 0U, _dt, (float)((double)entityAnimPool[entityId].power * 0.97 + 0.03 * (double)networkServe), 0.4f);
                     }
                 }
             }
             ExecuteTime[powerSystem.factory.index] = ExecuteTime[powerSystem.factory.index] * 0.99 + StopWatchList[powerSystem.factory.index].duration * 0.01;
             /** Patch note, skip the origin function **/
             return false;
+        }
+
+        private static void CalculateGeneratorLoadRatio(PowerNetwork powerNetwork, long cleanEnergyGeneratorCap, long num_energy_debt, out double generatorRatioClean, out double generatorRatioFuel)
+        {
+            //Patch Note : Calculate clean energy generator generaterRatio, and fuel generaterRatio seperately and apply to them 
+            long totalEnergyNeedGenerate = num_energy_debt;
+            long fuelEnergyCap = powerNetwork.energyCapacity - cleanEnergyGeneratorCap;
+            generatorRatioClean = 1.0;
+
+            // Different from origin calculation which ignores energy input energy from exchanger => some time generator may stop
+            // this ratio will make every fuel works equally
+            generatorRatioFuel = ((double)totalEnergyNeedGenerate - (double)cleanEnergyGeneratorCap) / ((double)fuelEnergyCap + 0.001);
+            generatorRatioFuel = generatorRatioFuel > 1.0 ? 1.0 : generatorRatioFuel;
+
+            if (generatorRatioFuel < 0.0)
+            {
+                generatorRatioFuel = 0.0;
+                generatorRatioClean = (double)totalEnergyNeedGenerate / ((double)cleanEnergyGeneratorCap + 0.001);
+                generatorRatioClean = generatorRatioClean > 1.0 ? 1.0 : generatorRatioClean;
+            }
+        }
+
+        private static double CalculateDischargeRatio(long capGenAndExc, long capExcDischarge, long capGreenGenerator, long energyDebt)
+        {
+            double excDischargeRatio;
+            long energyToProduce;
+            long energyToExcDischarge;
+
+            switch (ExchangerDischargeStrategy)
+            {
+                default:
+                case EExchangerDischargeStrategy.EQUAL_AS_FUEL_GENERATOR:
+                    // Fuel generators and exchangers discharge capacity
+                    long fuelAndDiscCap = (capGenAndExc - capGreenGenerator);
+
+                    // Assumes green generators works with full load, other facilities should generates remain
+                    energyToProduce = energyDebt - capGreenGenerator;
+
+                    // Equation:
+                    // (FuelCap +  ExcCap) * ExcDischargeRatio = EnergyToProduce = (Debt - GreenGenCap)
+                    excDischargeRatio = (fuelAndDiscCap <= 0 || energyToProduce <= 0) ? 0.0 :
+                            (energyToProduce < fuelAndDiscCap) ? ((double)energyToProduce / (double)fuelAndDiscCap) : 1.0;
+                    break;
+
+                case EExchangerDischargeStrategy.DISCHARGE_FIRST:
+                    // Discharge all power outside the capability of green generators 
+                    // If only greenGenerators is enough, no need to discharge
+                    energyToExcDischarge = energyDebt - capGreenGenerator;
+                    energyToExcDischarge = energyToExcDischarge < 0 ? 0 : energyToExcDischarge;
+
+                    // Equation:
+                    // ExcDischargeCap * ExcDischargeRatio = energyToExcDischarge = (Debt - GreenGenCap)
+                    excDischargeRatio = energyToExcDischarge < capExcDischarge ? (double)energyToExcDischarge / (double)capExcDischarge : 1.0;
+                    break;
+
+                case EExchangerDischargeStrategy.DISCHARGE_LAST:
+                    // Only discharge power outside the capability of all generators capability
+                    energyToExcDischarge = energyDebt - (capGenAndExc - capExcDischarge);
+                    energyToExcDischarge = energyToExcDischarge < 0 ? 0 : energyToExcDischarge;
+
+                    // Equation:
+                    // ExcDischargeCap * ExcDischargeRatio = energyToExcDischarge = (Debt - (FuelCap + GreenGenCap))
+                    excDischargeRatio = energyToExcDischarge < capExcDischarge ? (double)energyToExcDischarge / (double)capExcDischarge : 1.0;
+                    break;
+            }
+
+            return excDischargeRatio;
         }
     }
 }
